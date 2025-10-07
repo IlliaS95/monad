@@ -357,21 +357,7 @@ Result<std::vector<Receipt>> execute_block(
             state_tracers,
             revert_transaction));
 
-    State state{
-        block_state, Incarnation{block.header.number, Incarnation::LAST_TX}};
-
-    if constexpr (traits::evm_rev() >= EVMC_SHANGHAI) {
-        process_withdrawal(state, block.withdrawals);
-    }
-
-    apply_block_reward<traits>(state, block);
-
-    if constexpr (traits::evm_rev() >= EVMC_SPURIOUS_DRAGON) {
-        state.destruct_touched_dead();
-    }
-
-    MONAD_ASSERT(block_state.can_merge(state));
-    block_state.merge(state);
+    postprocess_block<traits>(block_state, block);
 
     return retvals;
 }

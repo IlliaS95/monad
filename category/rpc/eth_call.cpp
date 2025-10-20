@@ -262,13 +262,15 @@ namespace
             bytes32_t const tx_hash = to_bytes(keccak256(
                 rlp::encode_transaction(transactions[transaction_index])));
             json entry{
-                {"result", json::object()},
+                {"result", json{}},
                 {"txHash", std::format("0x{}", evmc::hex(tx_hash))}};
             return entry;
         };
 
         // Trace single transaction
         if (trace_transaction) {
+            std::println(
+                std::cout, "TRACING TRANSACTION {}", transaction_index);
             json trace = trace_entry(transaction_index);
             for (size_t i = 0; i < transactions.size(); ++i) {
                 if (i == transaction_index) {
@@ -994,8 +996,8 @@ struct monad_eth_call_executor
     void submit_eth_trace_block_or_transaction_to_pool(
         monad_chain_config const chain_config, BlockHeader const &block_header,
         uint64_t const block_number, bytes32_t const &block_id,
-        bytes32_t const &parent_id, uint64_t const transaction_index,
-        bool const trace_transaction,
+        bytes32_t const &parent_id, bool const trace_transaction,
+        uint64_t const transaction_index,
         void (*complete)(monad_eth_call_result *, void *user), void *const user,
         monad_tracer_config const tracer_config)
     {
@@ -1090,6 +1092,15 @@ struct monad_eth_call_executor
                     }
                     std::vector<Transaction> const &transactions =
                         maybe_transactions.value();
+                    if (trace_transaction &&
+                        transactions.size() <= transaction_index) {
+                        result->status_code = EVMC_REJECTED;
+                        result->message = strdup("Transaction out of bounds");
+                        MONAD_ASSERT(result->message);
+                        complete(result, user);
+                        return;
+                    }
+
                     std::vector<Address> senders;
                     senders.reserve(transactions.size());
                     {
@@ -1331,8 +1342,8 @@ void monad_eth_trace_block_or_transaction_executor_submit(
         block_number,
         block_id,
         parent_id,
-        transaction_index,
         trace_transaction,
+        transaction_index,
         complete,
         user,
         tracer_config);
@@ -1343,7 +1354,7 @@ void monad_eth_trace_transaction_executor_submit(
     enum monad_chain_config chain_config, uint8_t const *rlp_header,
     size_t rlp_header_len, uint64_t block_number, uint8_t const *rlp_block_id,
     size_t rlp_block_id_len, uint8_t const *rlp_parent_block_id,
-    size_t rlp_parent_block_id_len, uint64_t transaction_index,
+    size_t rlp_parent_block_id_len, uint64_t const transaction_index,
     void (*complete)(monad_eth_call_result *, void *user), void *user,
     enum monad_tracer_config tracer_config)
 {
@@ -1357,8 +1368,8 @@ void monad_eth_trace_transaction_executor_submit(
         rlp_block_id_len,
         rlp_parent_block_id,
         rlp_parent_block_id_len,
-        transaction_index,
         true,
+        transaction_index,
         complete,
         user,
         tracer_config);
@@ -1384,8 +1395,8 @@ void monad_eth_trace_block_executor_submit(
         rlp_block_id_len,
         rlp_parent_block_id,
         rlp_parent_block_id_len,
-        0,
         false,
+        0,
         complete,
         user,
         tracer_config);

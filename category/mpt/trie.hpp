@@ -44,6 +44,8 @@
     #pragma clang diagnostic pop
 #endif
 
+#include <quill/Quill.h>
+
 #include <atomic>
 #include <bit>
 #include <cstdint>
@@ -64,15 +66,51 @@ concept lockable_or_void = std::is_void_v<T> || requires(T x) {
 
 class Node;
 
+struct sync_file_operation_io_receiver
+{
+    chunk_offset_t offset;
+    unsigned bytes;
+
+    explicit constexpr sync_file_operation_io_receiver(
+        chunk_offset_t const offset_, unsigned const bytes_)
+        : offset(offset_)
+        , bytes(bytes_)
+    {
+    }
+
+    void set_value(
+        MONAD_ASYNC_NAMESPACE::erased_connected_operation *,
+        MONAD_ASYNC_NAMESPACE::sync_file_sender::result_type res)
+    {
+        MONAD_ASSERT_PRINTF(
+            res,
+            "fsync of offset {%d, %d}, %u bytes failed: %s",
+            offset.id,
+            offset.offset,
+            bytes,
+            res.assume_error().message().c_str());
+        LOG_INFO(
+            "Finish fsync {} bytes at chunk offset {},{}",
+            bytes,
+            (file_offset_t)offset.id,
+            (file_offset_t)offset.offset);
+    }
+};
+
 struct write_operation_io_receiver
 {
+    MONAD_ASYNC_NAMESPACE::AsyncIO *io;
+    chunk_offset_t offset;
     size_t should_be_written;
 
     // Node *parent{nullptr};
 
     explicit constexpr write_operation_io_receiver(
+        MONAD_ASYNC_NAMESPACE::AsyncIO *const io_, chunk_offset_t const offset_,
         size_t const should_be_written_)
-        : should_be_written(should_be_written_)
+        : io(io_)
+        , offset(offset_)
+        , should_be_written(should_be_written_)
     {
     }
 
@@ -90,6 +128,24 @@ struct write_operation_io_receiver
         //     parent->current_process_updates_sender_
         //         ->notify_write_operation_completed_(rawstate);
         // }
+        constexpr unsigned FSYNC_BITS = 20;
+        constexpr unsigned FSYNC_SIZE = 1U << FSYNC_BITS; // 1 MB
+
+        size_t const start_page = offset.offset >> FSYNC_BITS;
+        size_t const end_page =
+            (offset.offset + should_be_written) >> FSYNC_BITS;
+        if (start_page < end_page) {
+            chunk_offset_t const sync_offset(
+                offset.id, (offset.offset & ~(FSYNC_SIZE - 1)));
+            auto const bytes = (end_page - start_page) << FSYNC_BITS;
+            MONAD_ASSERT(bytes <= std::numeric_limits<unsigned>::max());
+            auto conn = io->make_connected(
+                MONAD_ASYNC_NAMESPACE::sync_file_sender{
+                    sync_offset, (unsigned)bytes},
+                sync_file_operation_io_receiver{sync_offset, (unsigned)bytes});
+            conn->initiate();
+            conn.release();
+        }
     }
 
     void reset(size_t const should_be_written_)

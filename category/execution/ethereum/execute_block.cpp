@@ -339,11 +339,7 @@ Result<std::vector<Receipt>> execute_block(
     MONAD_ASSERT(senders.size() == call_tracers.size());
     MONAD_ASSERT(senders.size() == state_tracers.size());
 
-<<<<<<< HEAD
     execute_block_header<traits>(chain, block_state, block.header);
-=======
-    preprocess_block<traits>(chain, block_state, block.header);
->>>>>>> 5d9995be5 (WIP)
 
     BOOST_OUTCOME_TRY(
         auto const retvals,
@@ -361,45 +357,6 @@ Result<std::vector<Receipt>> execute_block(
             state_tracers,
             revert_transaction));
 
-    postprocess_block<traits>(block_state, block);
-
-    return retvals;
-}
-
-<<<<<<< HEAD
-=======
-template <Traits traits>
-void preprocess_block(
-    Chain const &chain, BlockState &block_state, BlockHeader const &header)
-{
-    State state{block_state, Incarnation{header.number, 0}};
-
-    if constexpr (traits::evm_rev() >= EVMC_PRAGUE) {
-        deploy_block_hash_history_contract(state);
-    }
-
-    set_block_hash_history(state, header);
-
-    if constexpr (traits::evm_rev() >= EVMC_CANCUN) {
-        set_beacon_root(state, header);
-    }
-
-    // Ethereum mainnet dao fork
-    if constexpr (traits::evm_rev() == EVMC_HOMESTEAD) {
-        if (MONAD_UNLIKELY(header.number == dao::dao_block_number)) {
-            if (chain.get_chain_id() == 1) {
-                transfer_balance_dao(state);
-            }
-        }
-    }
-
-    MONAD_ASSERT(block_state.can_merge(state));
-    block_state.merge(state);
-}
-
-template <Traits traits>
-void postprocess_block(BlockState &block_state, Block const &block)
-{
     State state{
         block_state, Incarnation{block.header.number, Incarnation::LAST_TX}};
 
@@ -415,11 +372,10 @@ void postprocess_block(BlockState &block_state, Block const &block)
 
     MONAD_ASSERT(block_state.can_merge(state));
     block_state.merge(state);
+
+    return retvals;
 }
 
->>>>>>> 5d9995be5 (WIP)
 EXPLICIT_TRAITS(execute_block);
-EXPLICIT_TRAITS(preprocess_block);
-EXPLICIT_TRAITS(postprocess_block);
 
 MONAD_NAMESPACE_END

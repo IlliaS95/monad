@@ -53,10 +53,7 @@ Result<std::vector<Receipt>> state_after_transactions(
         noop_call_tracers.emplace_back(std::unique_ptr<NoopCallTracer>{
             std::make_unique<NoopCallTracer>()});
     }
-    MONAD_ASSERT(noop_call_tracers.size() == transactions.size());
 
-    // TODO(dhil): Probably worth being able to replay up
-    // to a bound.
     execute_block_header<traits>(chain, block_state, header);
     BlockMetrics metrics{};
     return execute_block_transactions<traits>(

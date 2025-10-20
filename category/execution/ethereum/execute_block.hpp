@@ -40,6 +40,9 @@ struct Block;
 struct Chain;
 
 template <Traits traits>
+void execute_block_header(Chain const &, BlockState &, BlockHeader const &);
+
+template <Traits traits>
 Result<std::vector<Receipt>> execute_block_transactions(
     Chain const &, BlockHeader const &, std::vector<Transaction> const &,
     std::vector<Address> const &senders,
@@ -59,12 +62,6 @@ Result<std::vector<Receipt>> execute_block(
     std::vector<std::unique_ptr<trace::StateTracer>> &state_tracers,
     RevertTransactionFn const & = [](Address const &, Transaction const &,
                                      uint64_t, State &) { return false; });
-
-template <Traits traits>
-void preprocess_block(
-    Chain const &chain, BlockState &block_state, BlockHeader const &header);
-template <Traits traits>
-void postprocess_block(BlockState &block_state, Block const &block);
 
 std::vector<std::optional<Address>>
 recover_senders(std::vector<Transaction> const &, fiber::PriorityPool &);

@@ -27,6 +27,7 @@
 #include <category/execution/ethereum/core/rlp/int_rlp.hpp>
 #include <category/execution/ethereum/core/rlp/transaction_rlp.hpp>
 #include <category/execution/ethereum/core/transaction.hpp>
+#include <category/execution/ethereum/db/db_traits_test.hpp>
 #include <category/execution/ethereum/db/trie_db.hpp>
 #include <category/execution/ethereum/db/util.hpp>
 #include <category/execution/ethereum/execute_block.hpp>
@@ -97,34 +98,6 @@ namespace
         0x0000000000000013370000000000000000000000000000000000000000000003_bytes32;
     constexpr auto value2 =
         0x0000000000000000000000000000000000000000000000000000000000000007_bytes32;
-
-    struct ShanghaiEthereumMainnet : EthereumMainnet
-    {
-        virtual evmc_revision get_revision(
-            uint64_t /* block_number */,
-            uint64_t /* timestamp */) const override
-        {
-            return EVMC_SHANGHAI;
-        }
-    };
-
-    struct InMemoryTrieDbFixture : public ::testing::Test
-    {
-        static constexpr bool on_disk = false;
-
-        InMemoryMachine machine;
-        mpt::Db db{machine};
-        vm::VM vm;
-    };
-
-    struct OnDiskTrieDbFixture : public ::testing::Test
-    {
-        static constexpr bool on_disk = true;
-
-        OnDiskMachine machine;
-        mpt::Db db{machine, mpt::OnDiskDbConfig{}};
-        vm::VM vm;
-    };
 
     ///////////////////////////////////////////
     // DB Getters
@@ -212,14 +185,6 @@ namespace
     }
 }
 
-template <typename TDB>
-struct DBTest : public TDB
-{
-};
-
-using DBTypes = ::testing::Types<InMemoryTrieDbFixture, OnDiskTrieDbFixture>;
-TYPED_TEST_SUITE(DBTest, DBTypes);
-
 TEST(DBTest, read_only)
 {
     auto const name =
@@ -281,7 +246,7 @@ TEST(DBTest, read_only)
 TYPED_TEST(DBTest, read_storage)
 {
     Account acct{.nonce = 1};
-    TrieDb tdb{this->db};
+    TrieDb &tdb = this->tdb;
     commit_sequential(
         tdb,
         StateDeltas{
@@ -318,7 +283,7 @@ TYPED_TEST(DBTest, read_storage)
 TYPED_TEST(DBTest, read_code)
 {
     Account acct_a{.balance = 1, .code_hash = A_CODE_HASH, .nonce = 1};
-    TrieDb tdb{this->db};
+    TrieDb &tdb = this->tdb;
     commit_sequential(
         tdb,
         StateDeltas{{ADDR_A, StateDelta{.account = {std::nullopt, acct_a}}}},
@@ -392,7 +357,7 @@ TEST_F(OnDiskTrieDbFixture, get_proposal_block_ids)
 TYPED_TEST(DBTest, ModifyStorageOfAccount)
 {
     Account acct{.balance = 1'000'000, .code_hash = {}, .nonce = 1337};
-    TrieDb tdb{this->db};
+    TrieDb &tdb = this->tdb;
     commit_sequential(
         tdb,
         StateDeltas{
@@ -423,7 +388,7 @@ TYPED_TEST(DBTest, ModifyStorageOfAccount)
 
 TYPED_TEST(DBTest, touch_without_modify_regression)
 {
-    TrieDb tdb{this->db};
+    TrieDb &tdb = this->tdb;
     commit_sequential(
         tdb,
         StateDeltas{
@@ -438,7 +403,7 @@ TYPED_TEST(DBTest, touch_without_modify_regression)
 TYPED_TEST(DBTest, delete_account_modify_storage_regression)
 {
     Account acct{.balance = 1'000'000, .code_hash = {}, .nonce = 1337};
-    TrieDb tdb{this->db};
+    TrieDb &tdb = this->tdb;
     commit_sequential(
         tdb,
         StateDeltas{
@@ -471,7 +436,7 @@ TYPED_TEST(DBTest, storage_deletion)
 {
     Account acct{.balance = 1'000'000, .code_hash = {}, .nonce = 1337};
 
-    TrieDb tdb{this->db};
+    TrieDb &tdb = this->tdb;
     commit_sequential(
         tdb,
         StateDeltas{
@@ -505,7 +470,7 @@ TYPED_TEST(DBTest, commit_receipts_transactions)
     using namespace intx;
     using namespace evmc::literals;
 
-    TrieDb tdb{this->db};
+    TrieDb &tdb = this->tdb;
     // empty receipts
     commit_sequential(tdb, StateDeltas{}, Code{}, BlockHeader{});
     EXPECT_EQ(tdb.receipts_root(), NULL_ROOT);
@@ -787,7 +752,7 @@ TYPED_TEST(DBTest, load_from_binary)
     std::ifstream accounts(test_resource::checkpoint_dir / "accounts");
     std::ifstream code(test_resource::checkpoint_dir / "code");
     load_from_binary(this->db, accounts, code);
-    TrieDb tdb{this->db};
+    TrieDb &tdb = this->tdb;
     EXPECT_EQ(
         tdb.state_root(),
         0xb9eda41f4a719d9f2ae332e3954de18bceeeba2248a44110878949384b184888_bytes32);
@@ -819,7 +784,7 @@ TYPED_TEST(DBTest, load_from_binary)
 
 TYPED_TEST(DBTest, commit_call_frames)
 {
-    TrieDb tdb{this->db};
+    TrieDb &tdb = this->tdb;
 
     CallFrame const call_frame1{
         .type = CallType::CALL,
@@ -886,11 +851,11 @@ TYPED_TEST(DBTest, commit_call_frames)
 
 // test referenced from :
 // https://github.com/ethereum/tests/blob/develop/BlockchainTests/GeneralStateTests/stQuadraticComplexityTest/Call50000.json
-TYPED_TEST(DBTest, call_frames_stress_test)
+TYPED_TEST(DBTraitsTest, call_frames_stress_test)
 {
     using namespace intx;
 
-    TrieDb tdb{this->db};
+    TrieDb &tdb = this->tdb;
 
     auto const from = 0xa94f5374fce5edbc8e2a8697c15331677e6ebf0b_address;
     auto const to = 0xbbbf5374fce5edbc8e2a8697c15331677e6ebf0b_address;
@@ -959,7 +924,7 @@ TYPED_TEST(DBTest, call_frames_stress_test)
             std::make_unique<trace::StateTracer>(std::monostate{}));
     }
 
-    auto const receipts = execute_block<EvmTraits<EVMC_SHANGHAI>>(
+    auto const receipts = execute_block<typename TestFixture::Trait>(
         EthereumMainnet{},
         block.value(),
         senders,
@@ -993,15 +958,27 @@ TYPED_TEST(DBTest, call_frames_stress_test)
     auto const actual_call_frames =
         read_call_frame(this->db, tdb.get_block_number(), 0);
 
-    EXPECT_EQ(actual_call_frames.size(), 35799);
+    if constexpr (TestFixture::is_monad_revision()) {
+        if constexpr (TestFixture::Trait::monad_rev() >= MONAD_FIVE) {
+            EXPECT_EQ(actual_call_frames.size(), 35781);
+        }
+        else {
+            EXPECT_EQ(actual_call_frames.size(), 35799);
+        }
+    }
+    else {
+        if constexpr (TestFixture::Trait::evm_rev() >= EVMC_BERLIN) {
+            EXPECT_EQ(actual_call_frames.size(), 35799);
+        }
+    }
 }
 
-// This test is based on the test `DBTest.call_frames_stress_test`
-TYPED_TEST(DBTest, assertion_exception)
+// This test is based on the test `DBTraitsTest.call_frames_stress_test`
+TYPED_TEST(DBTraitsTest, assertion_exception)
 {
     using namespace intx;
 
-    TrieDb tdb{this->db};
+    TrieDb &tdb = this->tdb;
 
     auto const from = 0xa94f5374fce5edbc8e2a8697c15331677e6ebf0b_address;
     auto const to = 0xbbbf5374fce5edbc8e2a8697c15331677e6ebf0b_address;
@@ -1024,7 +1001,7 @@ TYPED_TEST(DBTest, assertion_exception)
                       Account{
                           .balance = std::numeric_limits<uint256_t>::max(),
                           .code_hash = STRESS_TEST_CODE_HASH}}}}},
-        Code{},
+        Code{{STRESS_TEST_CODE_HASH, STRESS_TEST_ICODE}},
         BlockHeader{.number = 0});
 
     // clang-format off
@@ -1067,7 +1044,7 @@ TYPED_TEST(DBTest, assertion_exception)
 
     EXPECT_THROW(
         {
-            (void)execute_block<EvmTraits<EVMC_SHANGHAI>>(
+            (void)execute_block<typename TestFixture::Trait>(
                 EthereumMainnet{},
                 block.value(),
                 senders,
@@ -1084,9 +1061,9 @@ TYPED_TEST(DBTest, assertion_exception)
 
 // test referenced from :
 // https://github.com/ethereum/tests/blob/v10.0/BlockchainTests/GeneralStateTests/stRefundTest/refund50_1.json
-TYPED_TEST(DBTest, call_frames_refund)
+TYPED_TEST(DBTraitsTest, call_frames_refund)
 {
-    TrieDb tdb{this->db};
+    TrieDb &tdb = this->tdb;
 
     auto const from = 0xa94f5374fce5edbc8e2a8697c15331677e6ebf0b_address;
     auto const to = 0x2adc25665018aa1fe0e6bc666dac8fc2697ff9ba_address;
@@ -1165,8 +1142,8 @@ TYPED_TEST(DBTest, call_frames_refund)
             std::make_unique<trace::StateTracer>(std::monostate{}));
     }
 
-    auto const receipts = execute_block<EvmTraits<EVMC_SHANGHAI>>(
-        ShanghaiEthereumMainnet{},
+    auto const receipts = execute_block<typename TestFixture::Trait>(
+        EthereumMainnet{},
         block.value(),
         senders,
         recovered_authorities,
@@ -1200,6 +1177,38 @@ TYPED_TEST(DBTest, call_frames_refund)
         read_call_frame(this->db, tdb.get_block_number(), 0);
 
     ASSERT_EQ(actual_call_frames.size(), 1);
+
+    uint64_t const gas_used = [] {
+        if constexpr (TestFixture::is_evmc_revision()) {
+            if constexpr (TestFixture::Trait::evm_rev() <= EVMC_BERLIN) {
+                // value from
+                // https://github.com/ethereum/legacytests/blob/1f581b8ccdc4c63acf5f2c5c1b155c690c32a8eb/src/LegacyTests/Constantinople/BlockchainTestsFiller/GeneralStateTests/stRefundTest/refund50_1_d0g0v0Filler.json
+                // pre.0xa94f5374fce5edbc8e2a8697c15331677e6ebf0b.balance -
+                // expect[0].0xa94f5374fce5edbc8e2a8697c15331677e6ebf0b.balance
+                return static_cast<uint64_t>(0x186a0 - 0x012cb9);
+            }
+            else {
+                // value from
+                // https://github.com/ethereum/execution-specs/blob/v2.18.0rc5.dev1/tests/eest/static/state_tests/stRefundTest/refund50_1Filler.json
+                // (expect[0].result.<eoa:sender:0xa94f5374fce5edbc8e2a8697c15331677e6ebf0b>.balance
+                // -
+                // pre.<eoa:sender:0xa94f5374fce5edbc8e2a8697c15331677e6ebf0b>.balance)
+                // / transaction.gasPrice
+                return static_cast<uint64_t>((10'000'000 - 9'631'760) / 10);
+            }
+        }
+        else {
+            if constexpr (TestFixture::Trait::monad_rev() > MONAD_ZERO) {
+                // full gas_limit is charged since >=MONAD_ONE
+                return 0x186a0;
+            }
+            else {
+                static_assert(TestFixture::Trait::evm_rev() > EVMC_BERLIN);
+                // same cost as >EVMC_BERLIN
+                return static_cast<uint64_t>((10'000'000 - 9'631'760) / 10);
+            }
+        }
+    }();
     CallFrame expected{
         .type = CallType::CALL,
         .flags = 0,
@@ -1207,7 +1216,7 @@ TYPED_TEST(DBTest, call_frames_refund)
         .to = ca,
         .value = 0,
         .gas = 0x186a0,
-        .gas_used = 0x8fd8,
+        .gas_used = gas_used,
         .status = EVMC_SUCCESS,
         .depth = 0,
         .logs = std::vector<CallFrame::Log>{},

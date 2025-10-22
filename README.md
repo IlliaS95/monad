@@ -10,7 +10,7 @@ the source code for Category Labs' custom
 its [database implementation](https://docs.monad.xyz/monad-arch/execution/monaddb),
 and the high-level [transaction scheduling](https://docs.monad.xyz/monad-arch/execution/parallel-execution).
 The other main repository is [monad-bft](https://github.com/category-labs/monad-bft),
-which contains the source code for the consensus component.
+which contains the source code for the consensus component..
 
 ## Building the source code
 

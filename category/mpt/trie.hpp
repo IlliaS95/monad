@@ -79,7 +79,7 @@ struct sync_file_operation_io_receiver
     }
 
     void set_value(
-        MONAD_ASYNC_NAMESPACE::erased_connected_operation *,
+        MONAD_ASYNC_NAMESPACE::erased_connected_operation *io_state,
         MONAD_ASYNC_NAMESPACE::sync_file_sender::result_type res)
     {
         MONAD_ASSERT_PRINTF(
@@ -90,10 +90,12 @@ struct sync_file_operation_io_receiver
             bytes,
             res.assume_error().message().c_str());
         LOG_INFO(
-            "Finish fsync {} bytes at chunk offset {},{}",
+            "Finish fsync {} bytes at chunk offset {},{}, duration {}",
             bytes,
             (file_offset_t)offset.id,
-            (file_offset_t)offset.offset);
+            (file_offset_t)offset.offset,
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                io_state->elapsed));
     }
 };
 
@@ -129,22 +131,26 @@ struct write_operation_io_receiver
         //         ->notify_write_operation_completed_(rawstate);
         // }
         constexpr unsigned FSYNC_BITS = 20;
-        constexpr unsigned FSYNC_SIZE = 1U << FSYNC_BITS; // 1 MB
+        // constexpr unsigned FSYNC_SIZE = 1U << FSYNC_BITS; // 1 MB
 
         size_t const start_page = offset.offset >> FSYNC_BITS;
         size_t const end_page =
             (offset.offset + should_be_written) >> FSYNC_BITS;
         if (start_page < end_page) {
-            chunk_offset_t const sync_offset(
-                offset.id, (offset.offset & ~(FSYNC_SIZE - 1)));
-            auto const bytes = (end_page - start_page) << FSYNC_BITS;
-            MONAD_ASSERT(bytes <= std::numeric_limits<unsigned>::max());
-            auto conn = io->make_connected(
-                MONAD_ASYNC_NAMESPACE::sync_file_sender{
-                    sync_offset, (unsigned)bytes},
-                sync_file_operation_io_receiver{sync_offset, (unsigned)bytes});
-            conn->initiate();
-            conn.release();
+            auto const &ci = io->seq_chunks_[offset.id];
+            auto const fd = ci.ptr->write_fd(0).first;
+            MONAD_ASSERT(fsync(fd) == 0);
+            // chunk_offset_t const sync_offset(
+            //     offset.id, (offset.offset & ~(FSYNC_SIZE - 1)));
+            // auto const bytes = (end_page - start_page) << FSYNC_BITS;
+            // MONAD_ASSERT(bytes <= std::numeric_limits<unsigned>::max());
+            // auto conn = io->make_connected(
+            //     MONAD_ASYNC_NAMESPACE::sync_file_sender{
+            //         sync_offset, (unsigned)bytes},
+            //     sync_file_operation_io_receiver{sync_offset,
+            //     (unsigned)bytes});
+            // conn->initiate();
+            // conn.release();
         }
     }
 

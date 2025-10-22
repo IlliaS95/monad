@@ -90,8 +90,11 @@ private:
     pid_t const owning_tid_;
     class storage_pool *storage_pool_{nullptr};
     chunk_ptr_<cnv_chunk> cnv_chunk_;
+
+public:
     std::vector<chunk_ptr_<seq_chunk>> seq_chunks_;
 
+private:
     struct
     {
         int msgread, msgwrite;

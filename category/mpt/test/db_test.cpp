@@ -772,8 +772,7 @@ TEST(DbTest, history_length_adjustment_never_under_min)
     remove(dbname);
 }
 
-TEST_F(
-    OnDiskDbWithFileFixture, read_only_db_traverse_fail_upon_version_expiration)
+TEST_F(OnDiskDbWithFileFixture, read_only_db_traverse_as_version_expire)
 {
     struct TraverseMachinePruneHistory final : public TraverseMachine
     {
@@ -826,6 +825,12 @@ TEST_F(
         {
             return std::make_unique<TraverseMachinePruneHistory>(*this);
         }
+
+        void reset()
+        {
+            path = Nibbles{};
+            has_done_callback = false;
+        }
     };
 
     EXPECT_EQ(db.get_history_length(), MPT_TEST_HISTORY_LENGTH);
@@ -841,24 +846,51 @@ TEST_F(
         db.upsert(std::move(ls), version);
     };
 
-    while (version < MPT_TEST_HISTORY_LENGTH - 1) {
+    while (version < MPT_TEST_HISTORY_LENGTH) {
         upsert_once();
         ++version;
     }
     // traverse
-    AsyncIOContext io_ctx{ReadOnlyOnDiskDbConfig{.dbname_paths = {dbname}}};
-    Db ro_db{io_ctx};
     TraverseMachinePruneHistory traverse_machine{upsert_once};
-    auto const read_version = ro_db.get_earliest_version();
-    ASSERT_EQ(read_version, 0);
-    auto const root_cursor = ro_db.load_root_for_version(read_version);
-    ASSERT_EQ(
-        ro_db.traverse(root_cursor, traverse_machine, read_version), true);
-    EXPECT_EQ(ro_db.get_earliest_version(), read_version);
-    ++version;
-    ASSERT_EQ(
-        ro_db.traverse(root_cursor, traverse_machine, read_version), false);
-    EXPECT_GT(ro_db.get_earliest_version(), read_version);
+
+    // Helper to test both traverse APIs
+    auto test_traverse = [&](auto &db, auto traverse_fn) {
+        traverse_machine.reset();
+        version = db.get_latest_version();
+        auto const latest_version = db.get_latest_version();
+        auto const earliest_version = db.get_earliest_version();
+        auto root_cursor = db.find({}, latest_version).value();
+        ASSERT_EQ(
+            traverse_fn(root_cursor, traverse_machine, latest_version), true);
+        EXPECT_EQ(traverse_machine.path.nibble_size(), 0u);
+        EXPECT_EQ(db.get_earliest_version(), earliest_version);
+
+        // traverse earliest will erase earliest version
+        root_cursor = db.find({}, earliest_version).value();
+        ++version;
+        traverse_machine.reset();
+        ASSERT_EQ(
+            traverse_fn(root_cursor, traverse_machine, earliest_version),
+            false);
+        EXPECT_GT(db.get_earliest_version(), earliest_version);
+        EXPECT_EQ(traverse_machine.path.nibble_size(), 0u);
+    };
+
+    {
+        AsyncIOContext io_ctx{ReadOnlyOnDiskDbConfig{.dbname_paths = {dbname}}};
+        Db ro_db{io_ctx};
+        // Test both APIs
+        test_traverse(ro_db, [&](auto &&...args) {
+            return ro_db.traverse_blocking(args...);
+        });
+        test_traverse(
+            ro_db, [&](auto &&...args) { return ro_db.traverse(args...); });
+    }
+    {
+        RODb ro_db(ReadOnlyOnDiskDbConfig{.dbname_paths = {dbname}});
+        test_traverse(
+            ro_db, [&](auto &&...args) { return ro_db.traverse(args...); });
+    }
 }
 
 TEST_F(OnDiskDbWithFileFixture, benchmark_blocking_parallel_traverse)
@@ -1502,11 +1534,14 @@ TYPED_TEST(DbTraverseTest, traverse)
     }
 }
 
+TYPED_TEST(DbTraverseTest, upper_level_traverse) {}
+
 TYPED_TEST(DbTraverseTest, trimmed_traverse)
 {
     // Trimmed traversal
     struct TrimmedTraverse : public TraverseMachine
     {
+        unsigned curr_level{0};
         size_t &num_leaves;
 
         TrimmedTraverse(size_t &num_leaves)
@@ -1523,10 +1558,14 @@ TYPED_TEST(DbTraverseTest, trimmed_traverse)
             if (node.has_value()) {
                 ++num_leaves;
             }
+            ++curr_level;
             return true;
         }
 
-        virtual void up(unsigned char const, Node const &) override {}
+        virtual void up(unsigned char const, Node const &) override
+        {
+            --curr_level;
+        }
 
         virtual std::unique_ptr<TraverseMachine> clone() const override
         {
@@ -1549,6 +1588,7 @@ TYPED_TEST(DbTraverseTest, trimmed_traverse)
         TrimmedTraverse traverse{num_leaves};
         ASSERT_TRUE(
             this->db.traverse(res_cursor.value(), traverse, this->block_id));
+        ASSERT_EQ(traverse.curr_level, 0);
         EXPECT_EQ(num_leaves, 2);
     }
     {
@@ -1556,6 +1596,7 @@ TYPED_TEST(DbTraverseTest, trimmed_traverse)
         TrimmedTraverse traverse{num_leaves};
         ASSERT_TRUE(this->db.traverse_blocking(
             res_cursor.value(), traverse, this->block_id));
+        ASSERT_EQ(traverse.curr_level, 0);
         EXPECT_EQ(num_leaves, 2);
     }
 }

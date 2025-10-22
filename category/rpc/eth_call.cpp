@@ -34,7 +34,6 @@
 #include <category/execution/ethereum/execute_transaction.hpp>
 #include <category/execution/ethereum/state2/block_state.hpp>
 #include <category/execution/ethereum/state3/state.hpp>
-#include <category/execution/ethereum/state_at.hpp>
 #include <category/execution/ethereum/trace/prestate_tracer.hpp>
 #include <category/execution/ethereum/trace/rlp/call_frame_rlp.hpp>
 #include <category/execution/ethereum/tx_context.hpp>
@@ -249,16 +248,26 @@ namespace
         std::vector<Address> const &senders,
         std::vector<std::vector<std::optional<Address>>> const &authorities,
         bool const trace_transaction, uint64_t const transaction_index,
-        TrieRODb &tdb, vm::VM &vm, BlockHashBufferFinalized const buffer,
+        BlockState &block_state, BlockHashBufferFinalized const buffer,
         monad::fiber::PriorityPool &pool,
         enum monad_tracer_config tracer_config)
     {
+        MONAD_ASSERT(transactions.size() == senders.size());
+        MONAD_ASSERT(transactions.size() == authorities.size());
+
+        // Execute block header
+        execute_block_header<traits>(chain, block_state, header);
+        BlockMetrics metrics{};
+
+        // Prepare state tracers and auxiliary noop call tracers.
         using json = nlohmann::json;
-        BlockState block_state{tdb, vm};
         std::vector<std::unique_ptr<trace::StateTracer>> state_tracers{};
         state_tracers.reserve(transactions.size());
 
-        auto const trace_entry = [&](uint64_t const transaction_index) -> json {
+        // Helper to create a trace log entry of the form:
+        //   {"result": { execution trace goes here }, "txHash": "0x..."}
+        auto const trace_entry =
+            [&transactions](uint64_t const transaction_index) -> json {
             bytes32_t const tx_hash = to_bytes(keccak256(
                 rlp::encode_transaction(transactions[transaction_index])));
             json entry{
@@ -267,10 +276,18 @@ namespace
             return entry;
         };
 
+        std::vector<std::unique_ptr<CallTracerBase>> noop_call_tracers{};
+        noop_call_tracers.reserve(transactions.size());
+
+        for (size_t i = 0; i < transactions.size(); ++i) {
+            noop_call_tracers.emplace_back(std::unique_ptr<NoopCallTracer>{
+                std::make_unique<NoopCallTracer>()});
+        }
+
         // Trace single transaction
         if (trace_transaction) {
-            std::println(
-                std::cout, "TRACING TRANSACTION {}", transaction_index);
+            // We allocate just one trace entry here as we only need to return
+            // the trace result of `transaction[transaction_index]`.
             json trace = trace_entry(transaction_index);
             for (size_t i = 0; i < transactions.size(); ++i) {
                 if (i == transaction_index) {
@@ -296,7 +313,7 @@ namespace
             }
 
             Result<std::vector<Receipt>> result =
-                state_after_transactions<traits>(
+                execute_block_transactions<traits>(
                     chain,
                     header,
                     transactions, // TODO(dhil): we need to play only up to and
@@ -306,6 +323,8 @@ namespace
                     block_state,
                     buffer,
                     pool,
+                    metrics,
+                    noop_call_tracers,
                     state_tracers);
             if (result.has_error()) {
                 return Result<nlohmann::json>{std::move(result).as_failure()};
@@ -332,7 +351,7 @@ namespace
                 }
             }
             Result<std::vector<Receipt>> result =
-                state_after_transactions<traits>(
+                execute_block_transactions<traits>(
                     chain,
                     header,
                     transactions,
@@ -341,6 +360,8 @@ namespace
                     block_state,
                     buffer,
                     pool,
+                    metrics,
+                    noop_call_tracers,
                     state_tracers);
             if (result.has_error()) {
                 return Result<json>{std::move(result).as_failure()};
@@ -1130,6 +1151,7 @@ struct monad_eth_call_executor
                     // Set db to parent block state
                     TrieRODb tdb{db};
                     tdb.set_block_and_prefix(block_number - 1, parent_id);
+                    BlockState block_state{tdb, vm_};
 
                     auto const res = [&]() -> Result<nlohmann::json> {
                         if (chain_config == CHAIN_CONFIG_ETHEREUM_MAINNET) {
@@ -1144,8 +1166,7 @@ struct monad_eth_call_executor
                                 authorities,
                                 trace_transaction,
                                 transaction_index,
-                                tdb,
-                                vm_,
+                                block_state,
                                 *block_hash_buffer,
                                 fiber_pool->pool,
                                 tracer_config);
@@ -1165,8 +1186,7 @@ struct monad_eth_call_executor
                                 authorities,
                                 trace_transaction,
                                 transaction_index,
-                                tdb,
-                                vm_,
+                                block_state,
                                 *block_hash_buffer,
                                 fiber_pool->pool,
                                 tracer_config);

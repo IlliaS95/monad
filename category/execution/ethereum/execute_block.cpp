@@ -43,6 +43,8 @@
 #include <category/execution/ethereum/trace/call_tracer.hpp>
 #include <category/execution/ethereum/trace/event_trace.hpp>
 #include <category/execution/ethereum/validate_block.hpp>
+#include <category/execution/monad/staking/staking_contract.hpp>
+#include <category/execution/monad/staking/util/constants.hpp>
 #include <category/vm/evm/explicit_traits.hpp>
 #include <category/vm/evm/switch_traits.hpp>
 #include <category/vm/evm/traits.hpp>
@@ -205,6 +207,30 @@ void execute_block_header(
 
 EXPLICIT_TRAITS(execute_block_header);
 
+// TODO: move to execute_monad_block eventually
+template <Traits traits>
+void execute_staking_prelude(BlockState &block_state, BlockHeader const &header)
+{
+    if constexpr (traits::monad_rev() < MONAD_FIVE) {
+        return;
+    }
+
+    State state{block_state, Incarnation{header.number, 0}};
+    if (MONAD_UNLIKELY(!state.account_exists(staking::STAKING_CA))) {
+        return;
+    }
+
+    // pessimistically clear the proposer id slot in the case no reward txn is
+    // included with this block.
+    NoopCallTracer call_tracer;
+    staking::StakingContract contract(state, call_tracer);
+    contract.vars.proposer_val_id.clear();
+    MONAD_ASSERT(block_state.can_merge(state));
+    block_state.merge(state);
+}
+
+EXPLICIT_MONAD_TRAITS(execute_staking_prelude);
+
 template <Traits traits>
 Result<std::vector<Receipt>> execute_block_transactions(
     Chain const &chain, BlockHeader const &header,
@@ -340,6 +366,10 @@ Result<std::vector<Receipt>> execute_block(
     MONAD_ASSERT(senders.size() == state_tracers.size());
 
     execute_block_header<traits>(chain, block_state, block.header);
+
+    if constexpr (is_monad_trait_v<traits>) {
+        execute_staking_prelude<traits>(block_state, block.header);
+    }
 
     BOOST_OUTCOME_TRY(
         auto const retvals,
